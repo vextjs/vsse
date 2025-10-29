@@ -104,11 +104,43 @@ async function testDestroyRemovesListeners() {
   }
 }
 
+async function testConnectWithoutListeners() {
+  const client = new SSEClient({ url: 'mock://sse', idleTimeout: 500 })
+  // connect() should establish connection even without listeners
+  const result = client.connect()
+  assert(result === true, 'connect() returns true when url is provided')
+  await new Promise(r => setTimeout(r, 10))
+  assert(client.es instanceof MockEventSource, 'connect() creates EventSource without listeners')
+  assert(client.es.url === 'mock://sse', 'connect() uses correct url')
+  client.close()
+}
+
+async function testConnectWithoutUrl() {
+  const client = new SSEClient({ idleTimeout: 500 })
+  const result = client.connect()
+  assert(result === false, 'connect() returns false when url is missing')
+  assert(!client.es, 'connect() does not create EventSource without url')
+}
+
+async function testConnectIdempotent() {
+  const client = new SSEClient({ url: 'mock://sse' })
+  const result1 = client.connect()
+  const es1 = client.es
+  const result2 = client.connect()
+  const es2 = client.es
+  assert(result1 === true && result2 === true, 'connect() returns true on repeated calls')
+  assert(es1 === es2, 'connect() does not create duplicate connections')
+  client.close()
+}
+
 ;(async () => {
   try {
     await testIdleDoesNotCloseWhenActive()
     await testEventTypeFallback()
     await testDestroyRemovesListeners()
+    await testConnectWithoutListeners()
+    await testConnectWithoutUrl()
+    await testConnectIdempotent()
   } catch (e) {
     console.error('Unexpected error in tests:', e)
     failed++

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **主动建立 SSE 连接**: 新增 `connect()` 公开方法，允许不发送 POST 请求直接建立 SSE 连接
+- **使用示例文件**: 新增 `examples/active-connect-example.js` 展示主动连接的各种使用场景
+
+### Changed
+- **内部重构**: 将连接逻辑拆分为 `maybeConnect()` 和 `forceConnect()`，提高代码可维护性
+- **reconnect() 行为明确**: `reconnect()` 仅用于重连，主动连接请使用 `connect()`
+
+### Use Cases
+- 纯服务端推送场景（不需要客户端发起任务）
+- 预先建立长连接以减少首次请求延迟
+- 实时通知系统、聊天室等实时数据推送
+- 多频道订阅管理（类似 WebSocket）
+
 ## [0.1.4] - 2025-01-09
 
 ### Added

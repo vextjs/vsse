@@ -1,7 +1,7 @@
 {
   "name": "vsse",
-  "version": "0.1.5",
-  "description": "Lightweight SSE manager with single-connection multiplexing and per-request POST options. Now supports custom headers for SSE connections via event-source-polyfill.",
+  "version": "0.1.6",
+  "description": "Lightweight SSE manager with single-connection multiplexing, active connection support, and per-request POST options. Now supports custom headers for SSE connections via event-source-polyfill.",
   "type": "module",
   "main": "src/index.js",
   "module": "src/index.js",

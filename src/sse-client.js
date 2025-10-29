@@ -210,6 +210,23 @@ export class SSEClient {
     this.maybeConnect('reconnect');
   }
 
+  /**
+   * 主动建立 SSE 连接（无需监听器或 POST 请求）
+   * 适用于纯服务端推送场景
+   * @returns {boolean} 是否成功发起连接
+   */
+  connect() {
+    if (this.es) {
+      return true; // 已连接
+    }
+    if (!this.opts.url) {
+      console.warn('[SSEClient] connect() failed: url is required');
+      return false;
+    }
+    this.forceConnect('manual connect');
+    return true;
+  }
+
   // ========== 内部实现 ==========
   setupActivityListeners() {
     // 绑定并保存引用，以便 destroy() 时移除
@@ -246,6 +263,12 @@ export class SSEClient {
     if (this.es) return;
     const hasAnyListener = this.listeners.size > 0 || this.globalListeners.size > 0;
     if (!hasAnyListener) return; // 懒连接：仅当存在任意监听时才连接
+    this.forceConnect('lazy connect');
+  }
+
+  /** 强制建立连接，跳过监听器检查 */
+  forceConnect(reason) {
+    if (this.es) return;
     const url = this.opts.url;
     if (!url) return;
 

@@ -7,6 +7,7 @@ Lightweight front-end SSE manager with single-connection multiplexing.
 
 ## 新特性 ✨
 
+- **主动建立 SSE 连接**: 新增 `connect()` 方法，无需 POST 请求即可主动建立 SSE 连接
 - **SSE 连接自定义请求头**: 通过 `event-source-polyfill` 支持在 SSE 连接中使用自定义请求头
 - **自动认证头注入**: 设置 `token` 后自动为 SSE 连接添加 `Authorization: Bearer <token>` 头
 - **向下兼容**: 原有 API 完全兼容，新功能为可选配置
@@ -78,6 +79,33 @@ const { requestId, unsubscribe } = await sse.postAndListen(
     }
   }
 );
+```
+
+### 主动建立 SSE 连接（无需 POST 请求）
+```js
+import { SSEClient } from "vsse";
+
+const sse = new SSEClient({
+  url: "/sse?userId=alice",
+  eventName: "notify",
+  token: "your-jwt-token",
+  sseHeaders: {
+    "X-API-Key": "your-api-key"
+  }
+});
+
+// ✨ 新增：主动建立连接，无需 POST 或注册监听器
+sse.connect();
+
+// 然后可以使用 onBroadcast 接收服务端推送的消息
+const unsubscribe = sse.onBroadcast((msg) => {
+  console.log('收到服务端推送:', msg);
+});
+
+// 适用场景：
+// 1. 纯服务端推送（不需要客户端发起任务）
+// 2. 预先建立长连接以减少首次请求延迟
+// 3. 接收实时通知、系统消息等
 ```
 
 ### 适用场景示例
@@ -235,10 +263,108 @@ data: {"event":"ping"}
 ```
 
 ## 生命周期管理
+
+### 公开方法
+
+#### `connect()`
+主动建立 SSE 连接，无需 POST 请求或注册监听器。
+
+```js
+const connected = sse.connect();
+// 返回: boolean - true 表示成功发起连接，false 表示失败（通常因为缺少 url）
+```
+
+**使用场景**:
+- 纯服务端推送（不需要客户端发起任务）
+- 预先建立长连接以减少首次请求延迟
+- 配合 `onBroadcast()` 接收实时通知
+
+**示例**:
+```js
+const sse = new SSEClient({ url: '/sse/notifications' });
+sse.connect(); // 主动建立连接
+sse.onBroadcast((msg) => {
+    console.log('收到推送:', msg);
+});
+```
+
+#### `postAndListen(postUrl, body, onEvent, options)`
+发起 POST 请求并注册 SSE 回调。
+
+```js
+const { requestId, unsubscribe } = await sse.postAndListen(
+    '/api/chat',
+    { message: 'Hello' },
+    (msg) => { console.log(msg); },
+    { timeout: 5000 }
+);
+```
+
+**返回**: `Promise<{ requestId: string, unsubscribe: () => void }>`
+
+#### `onBroadcast(callback)`
+订阅全局广播消息（无 requestId 的消息）。
+
+**重要**: `onBroadcast` 只订阅**当前 SSEClient 实例**的广播消息，不会接收其他实例的消息。每个实例独立管理自己的连接和监听器。
+
+```js
+const unsubscribe = sse.onBroadcast((msg) => {
+    console.log('广播消息:', msg);
+});
+// 返回取消订阅函数
+```
+
+**示例 - 多实例独立订阅**:
+```js
+// 实例1：订阅通知频道
+const notificationSSE = new SSEClient({ url: '/sse/notifications' });
+notificationSSE.connect();
+notificationSSE.onBroadcast((msg) => {
+    console.log('通知:', msg);  // 只接收 /sse/notifications 的消息
+});
+
+// 实例2：订阅聊天频道
+const chatSSE = new SSEClient({ url: '/sse/chat' });
+chatSSE.connect();
+chatSSE.onBroadcast((msg) => {
+    console.log('聊天:', msg);  // 只接收 /sse/chat 的消息
+});
+```
+
+#### `reconnect()`
+强制重连 SSE 连接（仅在已有监听器时有效）。
+
+```js
+sse.reconnect();
+```
+
+**注意**: `reconnect()` 会检查是否有监听器，如果没有则不会重连。如果需要主动建立连接，请使用 `connect()`。
+
+#### `close()`
+关闭 SSE 连接。
+
+```js
+sse.close();
+```
+
+#### `updateConfig(patch)`
+动态更新配置（变更 url 会自动重连）。
+
 ```js
 // 动态更新配置（变更 url 会自动重连）
 sse.updateConfig({ url: '/sse?userId=bob', expectedPingInterval: 20_000 });
+```
 
+#### `destroy()`
+销毁实例，移除所有事件监听器并清理资源。
+
+```js
+sse.destroy();
+```
+
+### 使用示例
+
+```js
 // 手动重连（例如网络恢复后立即尝试）
 sse.reconnect();
 
@@ -250,9 +376,10 @@ sse.destroy();
 ```
 
 ## 全局广播（onBroadcast）
-- 支持订阅“无 requestId”的系统级/会话级 SSE 消息。
+- 支持订阅"无 requestId"的系统级/会话级 SSE 消息。
 - 使用 onBroadcast(cb) 注册监听；返回的函数可用于取消订阅。
-- 懒连接与空闲关闭会同时考虑“按 requestId 监听器”和“全局监听器”。
+- **作用域**: 每个 `SSEClient` 实例的 `onBroadcast` 只接收该实例连接的消息，多个实例之间相互独立。
+- 懒连接与空闲关闭会同时考虑"按 requestId 监听器"和"全局监听器"。
 
 示例：
 ```js
@@ -268,6 +395,23 @@ const off = sse.onBroadcast(({ phase, type, payload }) => {
 
 // 取消订阅
 // off();
+```
+
+**多实例场景**：
+```js
+// 每个实例独立订阅不同的频道
+const notificationSSE = new SSEClient({ url: '/sse/notifications' });
+const chatSSE = new SSEClient({ url: '/sse/chat-room-1' });
+
+notificationSSE.connect();
+notificationSSE.onBroadcast((msg) => {
+  console.log('通知:', msg);  // 只接收 /sse/notifications 的广播
+});
+
+chatSSE.connect();
+chatSSE.onBroadcast((msg) => {
+  console.log('聊天:', msg);  // 只接收 /sse/chat-room-1 的广播
+});
 ```
 
 服务端发送约定（无 requestId）：
