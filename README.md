@@ -5,11 +5,37 @@ Lightweight front-end SSE manager with single-connection multiplexing.
 中文简介：统一 SSE 长连接、多任务共享；POST 发起任务并通过 requestId 路由 SSE 消息到对应回调；
 支持全局与单次 POST 配置（headers/timeout/credentials/token）；**现已支持 SSE 连接自定义请求头**。
 
+## 📖 目录
+
+- [新特性](#新特性-)
+- [安装](#安装)
+- [快速开始](#快速开始)
+  - [基础用法](#基础用法)
+  - [SSE 连接自定义请求头](#新功能sse-连接自定义请求头)
+  - [主动建立 SSE 连接](#主动建立-sse-连接无需-post-请求)
+  - [适用场景示例](#适用场景示例)
+- [完整配置清单](#完整配置清单包含新增选项)
+- [快速开始（含单次覆盖）](#快速开始含单次覆盖)
+- [选项与默认值总览](#选项与默认值总览行为语义)
+- [心跳与重连](#心跳与重连关键时序)
+- [生命周期管理](#生命周期管理)
+  - [公开方法](#公开方法)
+- [全局广播（onBroadcast）](#全局广播onbroadcast)
+- [服务端事件格式与路由约定](#服务端事件格式与路由约定)
+- [CORS、凭据与自定义请求头支持](#cors凭据与自定义请求头支持)
+- [防重复连接保护](#防重复连接保护-)
+- [常见问题（FAQ）](#常见问题faq)
+- [排查清单](#排查清单出现时断时续延迟重连时)
+
+---
+
 ## 新特性 ✨
 
+- **防重复连接保护** 🛡️: 单个实例内自动防止重复建立连接，即使前端代码不规范也能保证单例连接
 - **主动建立 SSE 连接**: 新增 `connect()` 方法，无需 POST 请求即可主动建立 SSE 连接
 - **SSE 连接自定义请求头**: 通过 `event-source-polyfill` 支持在 SSE 连接中使用自定义请求头
 - **自动认证头注入**: 设置 `token` 后自动为 SSE 连接添加 `Authorization: Bearer <token>` 头
+- **连接状态诊断**: 新增 `getConnectionInfo()` 方法查看连接状态和调试信息
 - **向下兼容**: 原有 API 完全兼容，新功能为可选配置
 
 ## 安装
@@ -22,7 +48,8 @@ Lightweight front-end SSE manager with single-connection multiplexing.
 
 ## 快速开始
 
-### 基础用法（与之前完全兼容）
+### 基础用法
+
 ```js
 import { SSEClient } from "vsse";
 
@@ -465,6 +492,92 @@ data: {"requestId":"<uuid>","phase":"done","payload":{"content":"完整文本","
   - 方案 A：**Bearer Token**（推荐）：使用 `token` 或 `sseHeaders['Authorization']`
   - 方案 B：**API Key**：使用 `sseHeaders` 设置自定义认证头
   - 方案 C：**Cookie 会话**：使用 `sseWithCredentials=true`
+
+## 防重复连接保护 🛡️
+
+vsse 内置了多层防重复连接保护机制，确保**同一个实例内只创建一个连接**，即使前端代码不规范也能正常工作。
+
+### 保护机制
+
+1. **连接状态检查**: 检查是否已有 EventSource 实例，避免覆盖现有连接
+2. **连接锁（Mutex）**: 防止并发调用导致的竞态条件
+3. **防抖机制**: 限制连接尝试的最小时间间隔（500ms），防止频繁调用
+4. **状态机管理**: 跟踪连接生命周期（disconnected/connecting/connected/error）
+
+### 使用示例
+
+```javascript
+const sse = new SSEClient({ url: '/api/sse' });
+
+// ✅ 即使多次调用，也只会建立一个连接
+sse.connect();
+sse.connect();  // 自动忽略
+sse.connect();  // 自动忽略
+
+// ✅ 查看连接状态
+console.log(sse.getConnectionInfo());
+// {
+//   state: 'connected',
+//   isConnected: true,
+//   connectAttempts: 1,  // 只尝试连接一次
+//   listenersCount: 0,
+//   globalListenersCount: 0,
+//   ...
+// }
+```
+
+### 日志输出
+
+```javascript
+// 正常连接
+[vsse] 开始建立连接 (reason: manual, attempts: 1)
+[vsse] 连接已建立 ✓
+
+// 自动忽略重复调用
+[vsse] 连接已存在，忽略重复连接请求 (reason: manual)
+[vsse] 连接请求过于频繁，忽略 (距上次 123ms < 500ms)
+```
+
+### 调试工具
+
+使用 `getConnectionInfo()` 查看连接状态：
+
+```javascript
+const info = sse.getConnectionInfo();
+console.log(info);
+// {
+//   state: 'connected',              // 连接状态
+//   isConnected: true,               // 是否已连接
+//   isLocked: false,                 // 连接锁状态
+//   connectAttempts: 1,              // 连接尝试次数
+//   timeSinceLastAttempt: 5234,      // 距上次尝试的时间(ms)
+//   listenersCount: 0,               // 监听器数量
+//   globalListenersCount: 1,         // 全局监听器数量
+//   url: '/api/sse',                 // 连接 URL
+//   lastMessageAt: 1732954325123,    // 最后消息时间
+//   lastHeartbeatAt: 1732954324567   // 最后心跳时间
+// }
+```
+
+### 最佳实践
+
+```javascript
+// ✅ 推荐：在 React 组件中使用
+useEffect(() => {
+  const sse = new SSEClient({ url: '/api/sse' });
+  const unsub = sse.onBroadcast((msg) => console.log(msg));
+  
+  return () => {
+    unsub();
+    sse.close();
+  };
+}, []); // 空依赖数组，只执行一次
+```
+
+**注意**: 
+- 防重复保护的范围是**单个实例内**
+- 不同实例（即使 URL 相同）仍会创建独立的连接
+- 如需共享连接，请确保使用同一个实例（通过单例模式或依赖注入）
 
 ## 常见问题（FAQ）
 - 为什么我设置的 expectedPingInterval 和"实际断开/重连间隔"不一致？

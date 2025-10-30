@@ -88,6 +88,18 @@ export class SSEClient {
     /** @type {number|undefined} */
     this.heartbeatIntervalId = undefined;
 
+    // ✅ 防重复连接保护：连接状态跟踪
+    /** @type {'disconnected'|'connecting'|'connected'|'error'} */
+    this.connectionState = 'disconnected';
+    /** @type {boolean} 连接锁：防止并发连接 */
+    this._connectLock = false;
+    /** @type {number} 连接尝试计数器（用于调试） */
+    this._connectAttempts = 0;
+    /** @type {number} 最后一次连接尝试的时间戳 */
+    this._lastConnectAttempt = 0;
+    /** @type {number} 防抖：最小连接间隔（ms） */
+    this._minConnectInterval = 500;
+
     this.setupActivityListeners();
     // 懒连接：只有在有监听器时才连接
   }
@@ -191,8 +203,9 @@ export class SSEClient {
   }
 
   /** 主动关闭 SSE 连接 */
-  close() {
+  close(reason = 'manual') {
     if (this.es) {
+      console.log(`[vsse] 关闭连接 (reason: ${reason})`);
       this.es.close();
       this.es = undefined;
     }
@@ -201,11 +214,15 @@ export class SSEClient {
       this.heartbeatIntervalId = undefined;
     }
     this.clearIdleTimer();
+    // ✅ 重置状态
+    this.connectionState = 'disconnected';
+    this._connectLock = false;
   }
 
   /** 强制重连 */
-  reconnect() {
-    this.close('reconnect');
+  reconnect(reason = 'manual') {
+    console.log(`[vsse] 执行重连 (reason: ${reason})`);
+    this.close(reason);
     this.backoffState.attempts = 0;
     this.maybeConnect('reconnect');
   }
@@ -217,14 +234,36 @@ export class SSEClient {
    */
   connect() {
     if (this.es) {
+      console.log('[vsse] connect() 被调用但连接已存在');
       return true; // 已连接
     }
     if (!this.opts.url) {
-      console.warn('[SSEClient] connect() failed: url is required');
+      console.warn('[vsse] connect() 失败: url 未配置');
       return false;
     }
+    console.log('[vsse] 手动调用 connect()');
     this.forceConnect('manual connect');
     return true;
+  }
+
+  /**
+   * 获取连接状态和诊断信息（用于调试）
+   * @returns {Object} 连接状态信息
+   */
+  getConnectionInfo() {
+    return {
+      state: this.connectionState,
+      isConnected: !!this.es,
+      isLocked: this._connectLock,
+      connectAttempts: this._connectAttempts,
+      lastConnectAttempt: this._lastConnectAttempt,
+      timeSinceLastAttempt: Date.now() - this._lastConnectAttempt,
+      listenersCount: this.listeners.size,
+      globalListenersCount: this.globalListeners.size,
+      url: this.opts.url,
+      lastMessageAt: this.lastMessageAt,
+      lastHeartbeatAt: this.lastHeartbeatAt,
+    };
   }
 
   // ========== 内部实现 ==========
@@ -259,18 +298,62 @@ export class SSEClient {
     if (this.globalListeners) this.globalListeners.clear();
   }
 
-  maybeConnect() {
-    if (this.es) return;
+  maybeConnect(reason = 'unknown') {
+    // ✅ 防重复保护 1: 已有连接直接返回
+    if (this.es) {
+      if (reason !== 'activity' && reason !== 'post' && reason !== 'onBroadcast') {
+        console.warn(`[vsse] 连接已存在，忽略重复连接请求 (reason: ${reason})`);
+      }
+      return;
+    }
+
+    // ✅ 防重复保护 2: 连接中状态检查
+    if (this.connectionState === 'connecting' || this._connectLock) {
+      console.warn(`[vsse] 连接正在建立中，忽略重复连接请求 (reason: ${reason}, state: ${this.connectionState})`);
+      return;
+    }
+
+    // ✅ 防重复保护 3: 防抖 - 检查最小连接间隔
+    const now = Date.now();
+    const timeSinceLastAttempt = now - this._lastConnectAttempt;
+    if (timeSinceLastAttempt < this._minConnectInterval) {
+      console.warn(`[vsse] 连接请求过于频繁，忽略 (距上次 ${timeSinceLastAttempt}ms < ${this._minConnectInterval}ms, reason: ${reason})`);
+      return;
+    }
+
     const hasAnyListener = this.listeners.size > 0 || this.globalListeners.size > 0;
     if (!hasAnyListener) return; // 懒连接：仅当存在任意监听时才连接
-    this.forceConnect('lazy connect');
+
+    this._lastConnectAttempt = now;
+    this._connectAttempts++;
+    this.forceConnect(reason);
   }
 
   /** 强制建立连接，跳过监听器检查 */
   forceConnect(reason) {
-    if (this.es) return;
+    // ✅ 双重检查：防止并发调用
+    if (this.es) {
+      console.warn(`[vsse] forceConnect 被调用但连接已存在 (reason: ${reason})`);
+      return;
+    }
+
+    // ✅ 连接锁：防止并发
+    if (this._connectLock) {
+      console.warn(`[vsse] 连接锁已占用，忽略 forceConnect (reason: ${reason})`);
+      return;
+    }
+
     const url = this.opts.url;
-    if (!url) return;
+    if (!url) {
+      console.error('[vsse] 无法建立连接：url 未配置');
+      return;
+    }
+
+    // ✅ 占用连接锁
+    this._connectLock = true;
+    this.connectionState = 'connecting';
+
+    console.log(`[vsse] 开始建立连接 (reason: ${reason}, attempts: ${this._connectAttempts})`);
 
     try {
       // 构建 EventSourcePolyfill 配置选项
@@ -293,11 +376,17 @@ export class SSEClient {
       // 使用 EventSourcePolyfill 支持自定义请求头
       this.es = new EventSourcePolyfill(url, config);
     } catch (e) {
+      console.error(`[vsse] 创建 EventSource 失败 (reason: ${reason}):`, e);
+      this.connectionState = 'error';
+      this._connectLock = false; // ✅ 释放锁
       this.scheduleReconnect('ctor failed');
       return;
     }
 
     this.es.addEventListener('open', () => {
+      console.log('[vsse] 连接已建立 ✓');
+      this.connectionState = 'connected';
+      this._connectLock = false; // ✅ 释放锁
       this.backoffState.attempts = 0;
       this.lastMessageAt = Date.now();
       this.lastHeartbeatAt = Date.now();
@@ -324,6 +413,9 @@ export class SSEClient {
     this.es.addEventListener(this.opts.eventName || 'message', onMessage);
 
     this.es.addEventListener('error', () => {
+      console.warn('[vsse] 连接错误，准备重连');
+      this.connectionState = 'error';
+      this._connectLock = false; // ✅ 释放锁
       this.close('sse error');
       this.scheduleReconnect('sse error');
     });
