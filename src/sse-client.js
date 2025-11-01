@@ -168,8 +168,8 @@ export class SSEClient {
       if (!res || !res.ok) {
         this.listeners.delete(requestId);
         this.checkIdle();
-        const status = res ? `${res.status} ${res.statusText}` : 'no response';
-        throw new Error(`POST failed: ${status}`);
+        // const status = res ? `${res.status} ${res.statusText}` : 'no response';
+        // throw new Error(`POST failed: ${status}`);
       }
     } catch (e) {
       this.listeners.delete(requestId);
