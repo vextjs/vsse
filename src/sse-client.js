@@ -128,7 +128,7 @@ export class SSEClient {
    * @param {any} body
    * @param {(msg:SSEMessage<T>)=>void} onEvent
    * @param {(PostOptions & { requestId?: string })=} options
-   * @returns {Promise<ListenerHandle>}
+   * @returns {Promise<ListenerHandle & { response: Response }>}
    */
   async postAndListen(postUrl, body, onEvent, options = {}) {
     const requestId = options.requestId || this.createRequestId();
@@ -156,8 +156,9 @@ export class SSEClient {
 
     const postBody = JSON.stringify({ ...(body || {}), requestId });
 
+    let res;
     try {
-      const res = await fetch(postUrl, {
+      res = await fetch(postUrl, {
         method: 'POST',
         headers,
         body: postBody,
@@ -183,7 +184,7 @@ export class SSEClient {
       this.checkIdle();
     };
 
-    return { requestId, unsubscribe };
+    return { requestId, unsubscribe, response: res };
   }
 
   /**

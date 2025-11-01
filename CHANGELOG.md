@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **用户文档**: README.md 中新增防重复连接保护章节
 - **主动建立 SSE 连接**: 新增 `connect()` 公开方法，允许不发送 POST 请求直接建立 SSE 连接
 - **使用示例文件**: 新增 `examples/active-connect-example.js` 展示主动连接的各种使用场景
+- **postAndListen 返回 response 对象**: `postAndListen()` 方法现在返回 POST 请求的原生 Response 对象，可用于获取状态码、响应头、响应体等信息
 
 ### Changed
 - **内部重构**: 将连接逻辑拆分为 `maybeConnect()` 和 `forceConnect()`，提高代码可维护性

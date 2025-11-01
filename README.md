@@ -61,7 +61,7 @@ const sse = new SSEClient({
   expectedPingInterval: 15_000,
 });
 
-const { requestId, unsubscribe } = await sse.postAndListen(
+const { requestId, unsubscribe, response } = await sse.postAndListen(
   "/api/doA",
   { foo: "bar" },
   ({ phase, type, payload }) => {
@@ -70,6 +70,12 @@ const { requestId, unsubscribe } = await sse.postAndListen(
     }
   }
 );
+
+// 可以使用 response 对象获取 POST 请求的响应信息
+console.log('状态码:', response.status);
+console.log('响应头:', response.headers);
+// 如果需要读取响应体
+const data = await response.json();
 ```
 
 ### 新功能：SSE 连接自定义请求头
@@ -212,9 +218,9 @@ const sse = new SSEClient({
 
 ## 快速开始（含单次覆盖）
 ```js
-// 发起 POST 并监听 SSE；第四个参数为“单次 options”，优先级高于全局默认
+// 发起 POST 并监听 SSE；第四个参数为"单次 options"，优先级高于全局默认
 const controller = new AbortController();
-const { requestId, unsubscribe } = await sse.postAndListen(
+const { requestId, unsubscribe, response } = await sse.postAndListen(
   '/api/doA',                          // POST URL
   { foo: 'bar' },                      // 请求体（库会附加 requestId）
   ({ phase, payload }) => {            // 事件回调：progress/done/error/ping/自定义
@@ -235,6 +241,10 @@ const { requestId, unsubscribe } = await sse.postAndListen(
     requestId: crypto.randomUUID(),    // 可选：自定义请求 ID；不传则自动生成
   }
 );
+
+// 使用 response 对象
+console.log('POST 请求成功，状态码:', response.status);
+const result = await response.json(); // 获取响应体
 
 // 随时手动取消监听（仅影响前端回调路由；不影响其他任务）
 // unsubscribe();
@@ -319,15 +329,22 @@ sse.onBroadcast((msg) => {
 发起 POST 请求并注册 SSE 回调。
 
 ```js
-const { requestId, unsubscribe } = await sse.postAndListen(
+const { requestId, unsubscribe, response } = await sse.postAndListen(
     '/api/chat',
     { message: 'Hello' },
     (msg) => { console.log(msg); },
     { timeout: 5000 }
 );
+
+// 可以使用 response 对象获取 POST 请求的响应信息
+console.log('状态码:', response.status);
+const data = await response.json();
 ```
 
-**返回**: `Promise<{ requestId: string, unsubscribe: () => void }>`
+**返回**: `Promise<{ requestId: string, unsubscribe: () => void, response: Response }>`
+- `requestId`: 本次请求的唯一标识符
+- `unsubscribe`: 取消订阅的函数
+- `response`: 原生 Fetch API 的 Response 对象，可用于获取状态码、响应头、响应体等
 
 #### `onBroadcast(callback)`
 订阅全局广播消息（无 requestId 的消息）。
