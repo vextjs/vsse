@@ -7,6 +7,8 @@ Lightweight front-end SSE manager with single-connection multiplexing.
 
 > **配套服务端**: vsse 是**前端 SSE 客户端**，推荐与 [sseKify](https://www.npmjs.com/package/ssekify)（Node.js 服务端 SSE 工具）配合使用。sseKify 提供跨实例分发、房间管理、心跳保活、重放缓冲等能力，与 vsse 的 `postAndListen` 模式完美协同。
 
+> **⚠️ v0.2.0 破坏性变更**: `withHeartbeat` 默认值改为 `false`，`maxListeners` 降低到 `100`。[查看迁移指南](./MIGRATION-v0.2.0.md)
+
 ## 📖 目录
 
 - [新特性](#新特性-)
@@ -60,7 +62,7 @@ const sse = new SSEClient({
   url: "/sse?userId=alice",
   eventName: "notify",
   idleTimeout: 30_000,
-  withHeartbeat: true,
+  withHeartbeat: true,  // 显式启用心跳检测（默认为 false）
   expectedPingInterval: 15_000,
 });
 
@@ -196,9 +198,11 @@ const sse = new SSEClient({
   sseWithCredentials: false,           // 默认 false；SSE 连接是否携带 Cookie
 
   // ========== 空闲与心跳 ==========
-  idleTimeout: 30_000,                 // 默认 30_000ms；仅在"没有任何监听器"时按此关闭
-  withHeartbeat: true,                 // 默认 true；启用心跳监测
-  expectedPingInterval: 15_000,        // 默认 15_000ms；超时判定为 2×该值内未收到消息⇒重连
+  idleTimeout: 30_000,                 // 默认 30_000ms；仅在"无任何监听器"时按此关闭连接
+                                        // 有监听器时不会因超时断开，即使长时间无消息也能正常接收
+                                        // 设为 0 可完全关闭空闲检测
+  withHeartbeat: false,                // 默认 false；按需启用心跳监测
+  expectedPingInterval: 15_000,        // 默认 15_000ms；超时判定为 2×该值内未收到消息⇒重连（仅当 withHeartbeat=true 时生效）
 
   // ========== POST 全局默认（单次可覆盖） ==========
   defaultHeaders: {                    // 可选：POST 默认请求头
@@ -209,7 +213,7 @@ const sse = new SSEClient({
   credentials: 'include',              // 默认 undefined；POST 凭据
 
   // ========== 连接保护与重连 ==========
-  maxListeners: 1000,                  // 默认 1000；监听器数量上限
+  maxListeners: 100,                   // 默认 100；监听器数量上限（防止内存泄漏）
   reconnectBackoff: {                  // 指数退避 + 抖动
     baseMs: 1000,
     maxMs: 15_000,
@@ -259,14 +263,14 @@ const result = await response.json(); // 获取响应体
 ## 选项与默认值总览（行为语义）
 - url：SSE 服务地址（必填）。
 - eventName：默认 "message"；后端若用 "notify"，需设为 "notify" 才能被 addEventListener 捕获。
-- idleTimeout：默认 30_000ms；仅在“无任何监听器”时按此关闭；设 0 可关闭空闲断开。
+- **idleTimeout**：默认 30_000ms；**重要**：仅在"无任何监听器"（既没有 postAndListen 也没有 onBroadcast）时按此关闭连接。**有监听器时不会因超时断开**，即使长时间无消息也能正常接收。设为 0 可完全关闭空闲检测。
 - sseWithCredentials：默认 false；SSE 连接是否携带 Cookie。跨域需服务端返回：
   - Access-Control-Allow-Origin: https://your.app
   - Access-Control-Allow-Credentials: true
 - defaultHeaders/defaultTimeout/credentials/token：仅作用于 POST。
-- withHeartbeat：默认 true；启用心跳检测。
-- expectedPingInterval：默认 15_000ms；超过 2×该值未收到“任何消息/心跳”即判定超时并重连。
-- maxListeners：默认 1000；监听器上限。
+- withHeartbeat：默认 false；按需启用心跳检测（建议在长连接、弱网环境下启用）。
+- expectedPingInterval：默认 15_000ms；超过 2×该值未收到"任何消息/心跳"即判定超时并重连（仅当 withHeartbeat=true 时生效）。
+- maxListeners：默认 100；监听器数量上限（防止内存泄漏，特殊场景可增加）。
 - reconnectBackoff：默认 { baseMs: 1000, maxMs: 15_000, factor: 1.8, jitter: 0.3 }；控制断线后的重连延迟。
 
 合并/优先级规则（POST）：
@@ -800,12 +804,18 @@ useEffect(() => {
 - 如需共享连接，请确保使用同一个实例（通过单例模式或依赖注入）
 
 ## 常见问题（FAQ）
+- **idleTimeout 和心跳检测的区别？**
+  - **idleTimeout**：仅在"无任何监听器"时生效，用于节省资源（如所有任务完成后自动断开）
+  - **心跳检测（withHeartbeat）**：在有监听器时检测连接是否存活，防止僵尸连接
+  - **关键点**：有监听器时，idleTimeout 不会导致断开，只有心跳超时才会重连
+- **如何实现"永不断开"的长连接？**
+  - 方案 A：保持至少一个监听器（如 `onBroadcast`），此时 idleTimeout 不生效
+  - 方案 B：设置 `idleTimeout: 0`，完全禁用空闲检测
+  - 方案 C：启用心跳检测 `withHeartbeat: true`，确保连接健康
 - 为什么我设置的 expectedPingInterval 和"实际断开/重连间隔"不一致？
   - 判定超时阈值是 2×expectedPingInterval；再加上定时检测步进（5s）与退避延迟，肉眼观测会更长。
 - 为什么连接会自动断开？
-  - 可能因为：心跳超时；网络 offline；服务端关闭；无监听器且达到 idleTimeout。
-- 如何关闭"无监听器时"的空闲断开？
-  - 将 idleTimeout 设为 0。
+  - 可能因为：心跳超时（启用 withHeartbeat 时）；网络 offline；服务端关闭；无监听器且达到 idleTimeout。
 - **✨ 新问题**: SSE 连接的自定义请求头不生效？
   - 确认服务端 CORS 配置允许相应的头部：`Access-Control-Allow-Headers: Authorization, X-API-Key, ...`
   - 检查服务端是否正确读取了自定义头部

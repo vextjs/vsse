@@ -70,7 +70,7 @@ globalThis.fetch = async function(url, init) {
 }
 
 async function testIdleDoesNotCloseWhenActive() {
-  const client = new SSEClient({ url: 'mock://sse', idleTimeout: 50 })
+  const client = new SSEClient({ url: 'mock://sse', idleTimeout: 50, withHeartbeat: true })
   const { unsubscribe } = await client.postAndListen('/api/x', {}, () => {})
   // connect lazily
   await new Promise(r => setTimeout(r, 0))
@@ -83,7 +83,7 @@ async function testIdleDoesNotCloseWhenActive() {
 }
 
 async function testEventTypeFallback() {
-  const client = new SSEClient({ url: 'mock://sse', eventName: 'notify', idleTimeout: 500 })
+  const client = new SSEClient({ url: 'mock://sse', eventName: 'notify', idleTimeout: 500, withHeartbeat: true })
   let got
   await client.postAndListen('/api/x', {}, (msg) => { got = msg }, { requestId: 'r1' })
   await new Promise(r => setTimeout(r, 0))
@@ -105,7 +105,7 @@ async function testDestroyRemovesListeners() {
 }
 
 async function testConnectWithoutListeners() {
-  const client = new SSEClient({ url: 'mock://sse', idleTimeout: 500 })
+  const client = new SSEClient({ url: 'mock://sse', idleTimeout: 500, withHeartbeat: true })
   // connect() should establish connection even without listeners
   const result = client.connect()
   assert(result === true, 'connect() returns true when url is provided')
@@ -123,7 +123,7 @@ async function testConnectWithoutUrl() {
 }
 
 async function testConnectIdempotent() {
-  const client = new SSEClient({ url: 'mock://sse' })
+  const client = new SSEClient({ url: 'mock://sse', withHeartbeat: true })
   const result1 = client.connect()
   const es1 = client.es
   const result2 = client.connect()

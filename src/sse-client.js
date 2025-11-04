@@ -67,9 +67,9 @@ export class SSEClient {
       idleTimeout: 30_000,
       defaultTimeout: 10_000,
       eventName: 'message',
-      withHeartbeat: true,
+      withHeartbeat: false,  // 默认关闭心跳检测，按需启用
       expectedPingInterval: 15_000,
-      maxListeners: 1000,
+      maxListeners: 100,     // 降低到 100，更合理的上限
       reconnectBackoff: { baseMs: 1000, maxMs: 15_000, factor: 1.8, jitter: 0.3 },
       ...opts,
     };
